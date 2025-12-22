@@ -4,3 +4,4 @@ pymongo==4.15.5
 rdkit-pypi>=2024.9.2
 requests==2.32.5
 tqdm==4.67.1
+seaborn-0.13.2
