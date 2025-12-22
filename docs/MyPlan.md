@@ -235,6 +235,14 @@ E. 阴性/对照样本 (The Negatives, 10个)
 - 目标： AI 模型看不懂字符串（SMILES）和文本（MolBlock），它们只吃数字（向量/矩阵）。我们需要把清洗好的数据转化成机器可读的 Tensor。
 - 动作： 编写 4_vectorizer.py。
 - 核心产出： 数据库中新增 features 字段，包含 分子指纹 (Fingerprint) 和 图邻接矩阵 (Graph Matrix)。
+
+主要是通过论文，
+![alt text](image.png)
+
+根据这上面介绍的来。
+
+
+
 ### Step 3. 🔌 后端服务开发 (API Service) —— 软件工程的核心
 - 目标： 一个数据库如果只能用 Python 脚本查，那叫“脚本”，不叫“系统”。我们需要做一个 Web 后端接口。
 - 动作： 使用 FastAPI 编写接口。
