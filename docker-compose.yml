@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  # 服务 1: 你的 MongoDB 数据库
+  mongodb:
+    image: mongo:latest        # 使用官方最新版镜像
+    container_name: my_drug_db # 给容器起个好记的名字
+    restart: always            # 如果电脑重启，它会自动重启
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root  # 设置管理员账号
+      MONGO_INITDB_ROOT_PASSWORD: rootpassword # 设置管理员密码(毕设用简单点没事)
+    ports:
+      - "27017:27017"          # 端口映射: 电脑的27017 -> 容器的27017
+    volumes:
+      - ./data/mongo_volume:/data/db  # 【关键】把数据库文件挂载到你当前目录下的 mongo_data 文件夹
+                               # 这样即使你删了 Docker，数据还在你硬盘里！
+
+  # 服务 2: 一个轻量级的网页版数据库管理工具 (可选，但这很方便)
+  mongo-express:
+    image: mongo-express
+    container_name: my_db_admin
+    restart: always
+    ports:
+      - "8081:8081"            # 访问 localhost:8081 就能看到界面
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: root
+      ME_CONFIG_MONGODB_ADMINPASSWORD: rootpassword
+      ME_CONFIG_MONGODB_URL: mongodb://root:rootpassword@mongodb:27017/
+    depends_on:
+      - mongodb                # 只有等数据库启动了，这个界面才启动

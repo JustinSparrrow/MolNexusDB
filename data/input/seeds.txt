@@ -1,0 +1,50 @@
+Aspirin|MOL
+Paracetamol|MOL
+Caffeine|MOL
+Ibuprofen|MOL
+Metformin|MOL
+Sildenafil|MOL
+Imatinib|MOL
+Warfarin|MOL
+Dopamine|MOL
+Glucose|MOL
+Paclitaxel|MOL
+Vancomycin|MOL
+Cyclosporine A|MOL
+Rapamycin|MOL
+Vitamin B12|MOL
+Digoxin|MOL
+Amphotericin B|MOL
+Ivermectin|MOL
+Reserpine|MOL
+Fullerene|MOL
+Cisplatin|MOL
+Ferrocene|MOL
+Sodium Chloride|MOL
+Water|MOL
+DMSO|MOL
+ATP|MOL
+Glutathione|MOL
+Lipopolysaccharide|MOL
+Benzene|MOL
+Radical|MOL
+1ATP|PDB
+3AID|PDB
+1CRN|PDB
+4HHB|PDB
+1MBN|PDB
+2RH1|PDB
+6LU7|PDB
+3PTB|PDB
+1HSG|PDB
+5P21|PDB
+Curcumin|MOL
+Doxorubicin|MOL
+KCN|MOL
+Ethanol|MOL
+Glycerol|MOL
+Polyethylene Glycol|MOL
+Argon|MOL
+Heme|MOL
+Ubiquitin|MOL
+Alanine|MOL
