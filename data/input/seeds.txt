@@ -38,6 +38,8 @@ Radical|MOL
 3PTB|PDB
 1HSG|PDB
 5P21|PDB
+1IEP|PDB
+2HYY|PDB
 Curcumin|MOL
 Doxorubicin|MOL
 KCN|MOL

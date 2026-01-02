@@ -1,159 +1,126 @@
 import pymongo
 import pubchempy as pcp
-from chembl_webresource_client.new_client import new_client
 import requests
 import time
 import sys
 import os
+import logging
 
-# 引入配置
+# --- 1. 环境与配置 ---
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import config
 
-# --- 连接数据库 ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# --- 2. 数据库连接 ---
 client = pymongo.MongoClient(config.MONGO_URI)
 db_staging = client[config.DB_STAGING]
 db_raw = client[config.DB_RAW]
 
 col_queue = db_staging["task_queue"]
 col_pubchem = db_raw["raw_pubchem"]
-col_chembl = db_raw["raw_chembl"]  
+col_chembl = db_raw["raw_chembl"]
 col_pdb = db_raw["raw_pdb"]
 
-# 初始化 ChEMBL 客户端
-chembl_mol = new_client.molecule
-chembl_act = new_client.activity
+# --- 3. 核心抓取逻辑 ---
 
 def pubchem_to_dict(compound):
-    """
-    专门解决序列化问题：将 PubChem 对象手动转为 MongoDB 可存的纯字典
-    """
+    """PubChem 序列化处理"""
     c_dict = compound.to_dict()
-    # 处理 atoms: 将对象转为普通字典列表
     if compound.atoms:
-        c_dict['atoms'] = [
-            {'aid': a.aid, 'element': a.element, 'x': a.x, 'y': a.y, 'z': a.z} 
-            for a in compound.atoms
-        ]
-    # 处理 bonds: 同理
+        c_dict['atoms'] = [{'aid': a.aid, 'element': a.element, 'x': a.x, 'y': a.y, 'z': a.z} for a in compound.atoms]
     if compound.bonds:
-        c_dict['bonds'] = [
-            {'aid1': b.aid1, 'aid2': b.aid2, 'order': b.order} 
-            for b in compound.bonds
-        ]
+        c_dict['bonds'] = [{'aid1': b.aid1, 'aid2': b.aid2, 'order': b.order} for b in compound.bonds]
     return c_dict
 
-def fetch_pubchem_data(name):
-    """全量抓取 PubChem 数据"""
+def fetch_chembl_via_rest(name):
+    """
+    通过底层 REST API 深度抓取 ChEMBL 数据。
+    不再使用官方库，直接请求 URL 以保证数据最全。
+    """
+    try:
+        # 第一步：根据名字搜索获取 ChEMBL ID
+        search_url = f"https://www.ebi.ac.uk/chembl/api/data/molecule/search?q={name}&format=json"
+        search_res = requests.get(search_url, timeout=20).json()
+        
+        molecules = search_res.get('molecules', [])
+        if not molecules:
+            return None
+            
+        # 找到匹配度最高的一个 ID
+        chembl_id = molecules[0]['molecule_chembl_id']
+        logging.info(f"      🔗 识别到 ChEMBL ID: {chembl_id}")
+
+        # 第二步：直接请求该 ID 的全量详情页面 (核心修复点)
+        full_url = f"https://www.ebi.ac.uk/chembl/api/data/molecule/{chembl_id}.json"
+        full_record = requests.get(full_url, timeout=20).json()
+        
+        # 第三步：获取该分子的所有活性实验记录
+        act_url = f"https://www.ebi.ac.uk/chembl/api/data/activity.json?molecule_chembl_id={chembl_id}&limit=100"
+        activities_res = requests.get(act_url, timeout=20).json()
+        activities = activities_res.get('activities', [])
+
+        return {
+            "molecule_full_record": full_record, # 这里包含 cross_references
+            "all_activities": activities
+        }
+    except Exception as e:
+        logging.warning(f"ChEMBL REST 抓取异常 ({name}): {e}")
+    return None
+
+def fetch_pubchem_deep(name):
     try:
         compounds = pcp.get_compounds(name, namespace='name')
-        if compounds:
-            # 使用我们写的转换函数，确保数据是“纯净”的 JSON 格式
-            return pubchem_to_dict(compounds[0])
-    except Exception as e:
-        print(f"      ⚠️ PubChem 抓取异常 ({name}): {e}")
-    return None
+        return pubchem_to_dict(compounds[0]) if compounds else None
+    except: return None
 
-def fetch_chembl_data(name, smiles=None):
-    """全量抓取 ChEMBL 数据"""
+def fetch_pdb_full(pdb_id):
+    url = f"https://data.rcsb.org/rest/v1/core/entry/{pdb_id.lower()}"
     try:
-        res = None
-        if smiles:
-            # 使用 flexmatch 寻找最匹配的结构
-            res = chembl_mol.filter(molecule_structures__canonical_smiles__flexmatch=smiles)
+        r = requests.get(url, timeout=15)
+        return r.json() if r.status_code == 200 else None
+    except: return None
 
-        if not res or len(res) == 0:
-            res = chembl_mol.search(name)
-            
-        if res and len(res) > 0:
-            best_match = res[0] 
-            chembl_id = best_match['molecule_chembl_id']
-            
-            # 抓取活性数据并强制转化为 list，确保 MongoDB 能存
-            activities = list(chembl_act.filter(molecule_chembl_id=chembl_id)[0:50])
-            
-            return {
-                "molecule_full_record": best_match,
-                "all_activities": activities 
-            }
-    except Exception as e:
-        print(f"      ⚠️ ChEMBL 抓取异常 ({name}): {e}")
-    return None
+# --- 4. 执行逻辑 ---
 
-def process_tasks():
-    # 只拿 pending 状态的任务
+def start_worker():
     tasks = list(col_queue.find({"status": "pending"}))
-    total = len(tasks)
-    
-    if total == 0:
-        print(" Ø 没有发现等待处理的任务。请运行 loader 或重置任务状态。")
+    if not tasks:
+        logging.info("🏁 没有待处理任务。")
         return
 
-    print(f"📦 发现 {total} 个待处理任务，开始全量抓取...\n")
-
-    for i, task in enumerate(tasks):
+    for task in tasks:
         name = task["search_name"]
         category = task["category"]
-        task_id = task["_id"]
+        logging.info(f"🔎 挖掘中: {name}")
         
-        print(f"[{i+1}/{total}] 正在抓取: {name} ({category})...")
-
         try:
-            success_any = False # 标记是否至少从一个源拿到了数据
-
+            has_data = False
             if category == "MOL":
-                # 1. 尝试 PubChem
-                pc_data = fetch_pubchem_data(name)
-                current_smiles = None
-                
+                # 1. 抓 PubChem
+                pc_data = fetch_pubchem_deep(name)
                 if pc_data:
-                    col_pubchem.update_one(
-                        {"query_name": name}, 
-                        {"$set": {"data": pc_data, "updated_at": time.time()}}, 
-                        upsert=True
-                    )
-                    print("      ✅ PubChem: 成功")
-                    current_smiles = pc_data.get('isomeric_smiles')
-                    success_any = True
+                    col_pubchem.update_one({"query_name": name}, {"$set": {"data": pc_data, "updated_at": time.time()}}, upsert=True)
+                    has_data = True
                 
-                # 2. 尝试 ChEMBL
-                cb_data = fetch_chembl_data(name, smiles=current_smiles)
+                # 2. 直接用 REST 接口抓 ChEMBL (绕过官方库)
+                cb_data = fetch_chembl_via_rest(name)
                 if cb_data:
-                    col_chembl.update_one(
-                        {"query_name": name},
-                        {"$set": {"data": cb_data, "updated_at": time.time()}},
-                        upsert=True
-                    )
-                    print(f"      ✅ ChEMBL: 成功 (ID: {cb_data['molecule_full_record']['molecule_chembl_id']})")
-                    success_any = True
+                    col_chembl.update_one({"query_name": name}, {"$set": {"data": cb_data, "updated_at": time.time()}}, upsert=True)
+                    has_data = True
 
             elif category == "PDB":
-                url = f"https://data.rcsb.org/rest/v1/core/entry/{name.lower()}"
-                response = requests.get(url, timeout=10)
-                if response.status_code == 200:
-                    col_pdb.update_one(
-                        {"query_id": name},
-                        {"$set": {"data": response.json(), "updated_at": time.time()}},
-                        upsert=True
-                    )
-                    print("      ✅ RCSB PDB: 成功")
-                    success_any = True
+                pdb_data = fetch_pdb_full(name)
+                if pdb_data:
+                    col_pdb.update_one({"query_id": name}, {"$set": {"data": pdb_data, "updated_at": time.time()}}, upsert=True)
+                    has_data = True
 
-            # 更新任务状态
-            if success_any:
-                col_queue.update_one({"_id": task_id}, {"$set": {"status": "done"}})
-            else:
-                col_queue.update_one({"_id": task_id}, {"$set": {"status": "failed", "reason": "No data found in any source"}})
-
-            # 稍微停顿，防止被封 IP
-            time.sleep(0.8)
+            col_queue.update_one({"_id": task["_id"]}, {"$set": {"status": "done" if has_data else "failed"}})
+            time.sleep(1.5) # 稍微加长间隔，防止被 REST API 屏蔽
 
         except Exception as e:
-            print(f"   ❌ 运行时严重错误 ({name}): {e}")
-            col_queue.update_one({"_id": task_id}, {"$set": {"status": "error", "error_msg": str(e)}})
-
-    print("\n🎉 处理循环结束。请在 MongoDB Compass 中检查数据量。")
+            logging.error(f"💥 崩溃 ({name}): {e}")
+            col_queue.update_one({"_id": task["_id"]}, {"$set": {"status": "error"}})
 
 if __name__ == "__main__":
-    process_tasks()
-
+    start_worker()
